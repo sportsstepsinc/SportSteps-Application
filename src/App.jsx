@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import {
   Home, Calendar as CalendarIcon, Droplet, MapPin, User, Plus, Check, Trash2,
   Sun, Bell, BellOff, MessageSquare, Mail, ChevronRight, ChevronLeft, ExternalLink,
-  Sparkles, Flame, ShieldCheck, RefreshCw, Users,
+  Sparkles, Flame, ShieldCheck, RefreshCw, Users, Info,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -559,6 +559,47 @@ function NearbyScreen({ p, profile }) {
   );
 }
 
+function AboutScreen({ p }) {
+  return (
+    <div className="fade-in">
+      <PageHeader p={p} title="About Us" subtitle="The people behind SportsSteps" />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 20, maxWidth: 900 }}>
+        {ABOUT_PEOPLE.map((person) => (
+          <Card key={person.name} p={p} style={{ padding: 0, overflow: "hidden" }}>
+            <img
+              src={`${import.meta.env.BASE_URL}${person.photo}`}
+              alt={person.name}
+              style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", objectPosition: "center top", display: "block" }}
+            />
+            <div style={{ padding: "16px 18px 20px" }}>
+              <p style={{ fontFamily: display, fontSize: 20, fontWeight: 800, color: p.ink, margin: 0 }}>{person.name}</p>
+              <p style={{ fontFamily: body, fontSize: 12, fontWeight: 800, color: p.primary, margin: "2px 0 10px" }}>{person.role}</p>
+              <p style={{ fontFamily: body, fontSize: 13.5, color: p.inkFaint, margin: 0, lineHeight: 1.6, whiteSpace: "pre-line" }}>{person.bio}</p>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div style={{ maxWidth: 900, marginTop: 20 }}>
+        <Card p={p}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 12, background: p.primarySoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Sparkles size={18} color={p.primary} />
+            </div>
+            <p style={{ fontFamily: display, fontSize: 18, fontWeight: 800, color: p.ink, margin: 0 }}>{APP_PURPOSE.title}</p>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {APP_PURPOSE.body.map((para, i) => (
+              <p key={i} style={{ fontFamily: body, fontSize: 13.5, color: p.inkFaint, margin: 0, lineHeight: 1.6 }}>{para}</p>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function ProfileScreen({ p, profile, setProfile, theme, onThemeManualChange, onRestart }) {
   const toggleSupport = (key) => {
     const next = new Set(profile.support);
@@ -640,6 +681,34 @@ function ProfileScreen({ p, profile, setProfile, theme, onThemeManualChange, onR
 }
 
 /* ---------------------------------------------------------------------- */
+/*  ABOUT US — edit this section to update the About tab.                 */
+/*  Type your bio between the backticks. Line breaks are kept as-is.      */
+/*  Photos live in /public/about/ (swap the files to change the images).  */
+/* ---------------------------------------------------------------------- */
+
+const ABOUT_PEOPLE = [
+  {
+    name: "Yash Nallabothula",            // <- change me        // <- change me
+    photo: "image0.jpg",
+    bio: `Type your bio here. Tell people who you are, what sports you play, and why you helped build SportsSteps.`,
+  },
+  {
+    name: "Ananya Soraganvi",             // <- change me          // <- change me
+    photo: "IMG_7245.jpg",
+    bio: `Type her bio here. Tell people who she is, what she loves about sports, and why she helped build SportsSteps.`,
+  },
+];
+
+const APP_PURPOSE = {
+  title: "Why SportsSteps exists",
+  body: [
+    "SportsSteps is a prep companion for student athletes. It takes the guesswork out of game day by keeping hydration, food timing, weather, and gear checklists in one simple place.",
+    "Every athlete prepares differently. That's why SportsSteps has built-in support for autism, ADHD, mobility, visual, hearing, and chronic-condition needs, with themes, reminders, and resources that adapt to you.",
+    "Our goal is simple: help every student athlete feel prepared, confident, and included, so they can focus on the game.",
+  ],
+};
+
+/* ---------------------------------------------------------------------- */
 /*  App shell                                                              */
 /* ---------------------------------------------------------------------- */
 
@@ -649,6 +718,7 @@ const TABS = [
   { id: "prep", label: "Prep", icon: Droplet },
   { id: "nearby", label: "Nearby", icon: MapPin },
   { id: "profile", label: "Profile", icon: User },
+  { id: "about", label: "About", icon: Info },
 ];
 
 export default function SportsStepsApp() {
@@ -859,6 +929,7 @@ export default function SportsStepsApp() {
     prep: <PrepScreen p={p} mode={prepMode} setMode={setPrepMode} hydration={hydration} goal={goal} addWater={addWater} profile={profile} />,
     nearby: <NearbyScreen p={p} profile={profile} />,
     profile: <ProfileScreen p={p} profile={profile} setProfile={setProfile} theme={theme} onThemeManualChange={(k) => { setTheme(k); setThemeTouched(true); }} onRestart={restart} />,
+    about: <AboutScreen p={p} />,
   };
 
   return (
