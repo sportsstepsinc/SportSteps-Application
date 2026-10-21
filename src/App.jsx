@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Home, Calendar as CalendarIcon, Droplet, MapPin, User, Plus, Check, Trash2,
   Sun, Bell, BellOff, MessageSquare, Mail, ChevronRight, ChevronLeft, ExternalLink,
-  Sparkles, Flame, ShieldCheck, RefreshCw, Users, Info,
+  Sparkles, Flame, ShieldCheck, RefreshCw, Users, Info, Bot, Send,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -161,6 +161,30 @@ function GlobalStyle() {
         .bottom-tabbar { display: flex; }
       }
 
+      *, *::before, *::after { box-sizing: border-box; }
+      body { margin: 0; }
+      .land-wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+      .land-hero { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: center; padding: 64px 0 56px; }
+      .land-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+      .land-h1 { font-size: clamp(34px, 5.2vw, 56px); line-height: 1.05; }
+      .land-btn { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+      .land-btn:hover { transform: translateY(-2px); }
+      .land-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+      .land-card:hover { transform: translateY(-3px); box-shadow: 0 18px 36px -24px rgba(20,25,45,0.35); }
+      @media (max-width: 900px) {
+        .land-hero { grid-template-columns: 1fr; gap: 36px; padding: 36px 0 40px; }
+        .land-grid3 { grid-template-columns: 1fr 1fr; }
+      }
+      @media (max-width: 560px) {
+        .land-wrap { padding: 0 16px; }
+        .land-grid3 { grid-template-columns: 1fr; }
+        .land-logo-text { display: none; }
+        .land-tab { padding: 8px 10px !important; }
+        .land-tab svg { display: none; }
+        .land-cta { padding: 9px 12px !important; font-size: 13px !important; }
+        .land-cta svg { display: none; }
+      }
+
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
       }
@@ -263,8 +287,8 @@ function PageHeader({ p, title, subtitle }) {
   );
 }
 
-function Card({ p, children, style }) {
-  return <div style={{ background: p.card, border: `1px solid ${p.line}`, borderRadius: 20, padding: 20, ...style }}>{children}</div>;
+function Card({ p, children, style, className }) {
+  return <div className={className} style={{ background: p.card, border: `1px solid ${p.line}`, borderRadius: 20, padding: 20, ...style }}>{children}</div>;
 }
 
 function HydrationRing({ p, pct, size = 100 }) {
@@ -600,6 +624,344 @@ function AboutScreen({ p }) {
   );
 }
 
+/* ---------------------------------------------------------------------- */
+/*  Parent AI assistant                                                    */
+/*                                                                         */
+/*  Three modes (checked in this order):                                   */
+/*   1. Proxy  - VITE_CHAT_API_URL points at your own server (Cloudflare   */
+/*      Worker in chat-proxy/). The Groq key stays secret. Use this for    */
+/*      the live site.                                                     */
+/*   2. Direct - VITE_GROQ_API_KEY in a .env.local file. Calls Groq right  */
+/*      from the browser. Fine for testing on your own computer, but the   */
+/*      key is visible to anyone who opens the deployed site, so do not    */
+/*      deploy with it.                                                    */
+/*   3. Built-in - no setup. Uses the guidance library below, so the chat  */
+/*      always works, even offline.                                        */
+/*  Never type an API key into this file.                                  */
+/* ---------------------------------------------------------------------- */
+
+const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || "";
+const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_MODEL = "llama-3.3-70b-versatile"; // faster/cheaper: "llama-3.1-8b-instant"
+const AI_ON = !!(CHAT_API_URL || GROQ_KEY);
+
+// Used by direct mode. (The proxy keeps its own copy in chat-proxy/worker.js.)
+const AI_SYSTEM_PROMPT = `You are the SportsSteps parent assistant. You help parents and caregivers of student athletes prepare for practices, games, and tournaments.
+
+Adapt every answer to the athlete's support needs listed in the context. Examples of useful adaptations:
+- Autism / sensory-sensitive: predictable routines, visual schedules, previewing the venue, quiet breaks, sensory comfort items.
+- ADHD: short steps, timers, visual checklists, movement breaks, one instruction at a time.
+- Physical / mobility disability: venue accessibility, adaptive equipment checks, transfers, travel logistics.
+- Visual impairment: familiarizing with the space, describing drills out loud, high-contrast gear, glare.
+- Hearing impairment: visual or written play calls, device care and spare batteries, positioning near the coach.
+- Chronic condition: care-plan reminders, who at the event knows the plan, rest and fuel timing.
+
+Rules:
+- Be warm, practical, and concise (under about 200 words). Use short bullet points when helpful.
+- You are not a doctor. Never give medication doses, diagnose, or tell a parent to change a treatment. For health decisions, refer them to their child's doctor.
+- If a message suggests an emergency, tell them to call 911 first.
+- Do not ask for or repeat personal information such as full names, addresses, or phone numbers.
+- Stay on topic (youth sports prep, routines, communication with coaches, wellbeing around sports). Politely decline unrelated requests.`;
+
+const SUPPORT_SHORT = {
+  autism: "autism / sensory needs", adhd: "ADHD", mobility: "mobility needs",
+  visual: "low vision", hearing: "hearing needs", chronic: "a chronic condition",
+};
+
+const SUPPORT_PROMPTS = {
+  autism: "How can I prepare my child for a loud, crowded game?",
+  adhd: "Help me build a simple pre-game routine with short steps.",
+  mobility: "What should I check about venue accessibility before a meet?",
+  visual: "How can I help my child follow practice with low vision?",
+  hearing: "How do I make sure the coach communicates in a way my child can follow?",
+  chronic: "What should be in my child's game-day health plan?",
+};
+
+// Tips for the built-in assistant. `base` is for everyone; other keys match support needs.
+const TIPS = {
+  gameday: {
+    title: "Here's how I'd approach game day",
+    base: ["Pack the bag the night before using the checklist on the Home tab.", "Arrive early so your athlete can settle in before it gets busy.", "Build in buffer time for travel, warm-up, and a snack."],
+    autism: ["Walk through the day in order. A simple picture or written schedule helps a lot.", "If you can, visit the venue ahead of time and find a quiet spot for breaks."],
+    adhd: ["Break the morning into 3-4 small steps on a visual checklist.", "Use a timer for getting ready and give a heads-up 10 minutes before leaving."],
+    mobility: ["Check accessible parking, entrances, restrooms, and seating before you go.", "Inspect adaptive equipment the night before, including chargers and spare parts."],
+    visual: ["Walk the space ahead of time so the layout feels familiar.", "Ask the coach to describe drills out loud and use high-contrast markers or gear."],
+    hearing: ["Ask for written or visual play calls and a spot in the huddle where your athlete can see the coach.", "Charge hearing devices and pack spare batteries."],
+    chronic: ["Pack medications, supplies, and a copy of the care plan, and tell the coach where they are.", "Know where the nearest medical help is at the venue."],
+  },
+  hydration: {
+    title: "Hydration basics",
+    base: ["Sip steadily through the day instead of drinking a lot at once.", "Use the hydration goal on the Prep tab and tap to log each bottle.", "Pack a bottle that's easy to open and carry, and refill before the game."],
+    autism: ["Some kids are sensitive to taste or temperature. Stick with a familiar bottle and drink they already like."],
+    adhd: ["Tie sips to cues (every break, every water-break whistle) since thirst can get missed when focused."],
+    mobility: ["Choose a bottle with a straw or easy-grip design that can be reached without help."],
+    chronic: ["Fluid and electrolyte needs can differ with some conditions, so check your child's targets with their doctor."],
+  },
+  food: {
+    title: "Fuel before and after",
+    base: ["Before: a familiar meal with carbs and some protein about 2-3 hours ahead, plus a light snack closer to start time.", "After: protein plus carbs and water within an hour or so (see the Prep tab for ideas).", "Stick to foods your athlete already knows on game day. It's not the day to try something new."],
+    autism: ["Bring safe, familiar foods in case venue food doesn't work for texture or smell."],
+    adhd: ["Pack snacks that are easy to grab so eating doesn't get forgotten mid-event."],
+    chronic: ["Meal timing may need to match your child's care plan, so follow their doctor's guidance."],
+  },
+  heat: {
+    title: "Weather and sun safety",
+    base: ["Check the forecast and UV index on the Home tab before heading out.", "Apply sunscreen 15-30 minutes before and reapply during long events.", "In heat, plan shade breaks, light clothing, and extra water. Stop and cool down if your athlete feels dizzy or unwell."],
+    autism: ["Some kids don't mention discomfort. Check in regularly and look for signs like flushing or slowing down."],
+    visual: ["Sunglasses or a visor can reduce glare for light-sensitive eyes."],
+    chronic: ["Some conditions and medications make heat harder to handle, so ask your doctor about hot-weather precautions."],
+  },
+  coach: {
+    title: "Talking with the coach",
+    base: ["Share a short, positive summary: what helps your athlete do their best and what to do if they struggle.", "Offer a one-page note with key info and your contact number.", "Ask about accommodations early, before the first game. Schools often have formal plans (like a 504 or IEP) that can apply."],
+    autism: ["Explain sensory triggers and what calming looks like, and agree on a break signal."],
+    adhd: ["Ask the coach to give short, one-step instructions and positive reminders."],
+    hearing: ["Ask for the coach to face your athlete when speaking and to share plans in writing."],
+    visual: ["Ask the coach to name people and describe plays out loud."],
+    mobility: ["Talk about equipment storage, transitions between spaces, and how drills can be adapted."],
+    chronic: ["Share the emergency plan and make sure at least one adult knows what to do."],
+  },
+  calm: {
+    title: "Helping with nerves and overwhelm",
+    base: ["Validate the feeling first (\"This is a big day, it's okay to feel nervous\") before problem-solving.", "Agree on a break plan ahead of time: where to go and how to signal.", "Practice a simple calming routine at home, like slow breathing, so it's familiar on game day."],
+    autism: ["Bring comfort items or headphones, and keep a quiet place ready. Previewing what will happen reduces surprises."],
+    adhd: ["Use short movement breaks and a clear next step to turn restlessness into focus."],
+    hearing: ["Crowded, loud venues can be tiring for hearing devices. Quiet breaks help."],
+    chronic: ["Stress can affect some conditions, so keep routines steady and the care plan close by."],
+  },
+  gear: {
+    title: "Packing and gear",
+    base: ["Use the checklist on the Home tab and pack the night before.", "Keep a 'go bag' with the basics so you only add what changes.", "Lay out the uniform and shoes ahead of time to avoid a morning scramble."],
+    mobility: ["Add chargers, spare parts, and any transfer or support items to the list."],
+    hearing: ["Pack spare batteries and a dry-aid case for hearing devices."],
+    visual: ["Include backup glasses or lenses and a visor."],
+    chronic: ["Add medications and supplies to the checklist. Profile setup does this for you."],
+  },
+};
+
+function localReply(text, profile, ctx = {}) {
+  const t = text.toLowerCase();
+  const keys = [...profile.support];
+
+  if (/emergency|911|can't breathe|cannot breathe|unconscious|not breathing|seizure (now|right now)/.test(t)) {
+    return "If this is an emergency, call 911 right now. Don't wait for a reply here. Once your athlete is safe, I'm happy to help with next steps.";
+  }
+  if (/medic|insulin|inhaler|epipen|dose|dosage|prescription|diabet|asthma/.test(t)) {
+    const extra = keys.includes("chronic")
+      ? "\n\nSince your profile includes a chronic condition, I added medication to your checklist as a reminder."
+      : "";
+    return "I can't give advice on medications or doses. Please follow your child's doctor's plan.\n\nWhat I can help with:\n• Add a medication reminder to the bag checklist.\n• Make sure the coach and one other adult know where the medication is and what to do.\n• Keep a copy of the care plan in the bag." + extra;
+  }
+
+  let topic = "gameday";
+  if (/water|hydrat|drink|thirst|fluid/.test(t)) topic = "hydration";
+  else if (/\beat|food|snack|meal|breakfast|lunch|dinner|fuel|nutrition/.test(t)) topic = "food";
+  else if (/heat|hot\b|weather|sun|uv|sunscreen|cold|rain|temperature/.test(t)) topic = "heat";
+  else if (/coach|teammate|accommodat|504|iep|explain|tell the|talk to/.test(t)) topic = "coach";
+  else if (/anxi|nervous|overwhelm|meltdown|stress|scared|worried|panic|sensory|loud|crowd|upset|cry/.test(t)) topic = "calm";
+  else if (/gear|pack|bag|equipment|checklist|forget|uniform|shoes/.test(t)) topic = "gear";
+
+  const tips = TIPS[topic];
+  const lines = [`${tips.title}:`, ...tips.base.map((x) => `• ${x}`)];
+  keys.forEach((k) => {
+    if (tips[k]) {
+      lines.push("", `For ${SUPPORT_SHORT[k]}:`);
+      tips[k].slice(0, 2).forEach((x) => lines.push(`• ${x}`));
+    }
+  });
+
+  if (topic === "heat" && ctx.weather && ctx.weather.source !== "default") {
+    lines.push("", `Right now it's about ${ctx.weather.tempF}°F with a UV index of ${ctx.weather.uv}.`);
+  }
+  if (topic === "gameday" && ctx.nextEvent) {
+    lines.push("", `Next up: ${ctx.nextEvent.title} on ${ctx.nextEvent.day} at ${ctx.nextEvent.time}.`);
+  }
+  if (keys.length === 0) {
+    lines.push("", "Tip: add support needs in the Profile tab and I'll tailor this to your child.");
+  }
+  lines.push("", "Want me to go deeper on any of this?");
+  return lines.join("\n");
+}
+
+function buildChatContext(profile, weather, nextEvent) {
+  const needs = [...profile.support].map((k) => SUPPORT_OPTIONS.find((o) => o.key === k)?.label).filter(Boolean);
+  const parts = [
+    `Sport: ${profile.sport}.`,
+    needs.length ? `Support needs: ${needs.join("; ")}.` : "No specific support needs were selected.",
+  ];
+  if (weather && weather.source !== "default") parts.push(`Current weather: ${weather.tempF}F, UV ${weather.uv}.`);
+  if (nextEvent) parts.push(`Next event: ${nextEvent.title}, ${nextEvent.day} at ${nextEvent.time}.`);
+  return parts.join(" ");
+}
+
+async function askAI(messages, context) {
+  const history = messages.map((m) => ({ role: m.role, content: m.text })).slice(-12);
+  while (history.length && history[0].role !== "user") history.shift();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    if (CHAT_API_URL) {
+      const res = await fetch(CHAT_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context, messages: history }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
+      const data = await res.json();
+      if (!data.reply) throw new Error("Proxy sent an empty reply");
+      return data.reply;
+    }
+
+    const res = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_KEY}` },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        temperature: 0.6,
+        max_tokens: 500,
+        messages: [{ role: "system", content: `${AI_SYSTEM_PROMPT}\n\nAthlete context: ${context}` }, ...history],
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`Groq returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content?.trim();
+    if (!reply) throw new Error("Groq sent an empty reply");
+    return reply;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function ChatScreen({ p, profile, weather, nextEvent }) {
+  const keys = [...profile.support];
+  const who = profile.name || "your athlete";
+  const greeting = keys.length
+    ? `Hi! I'm your SportsSteps parent assistant. I'll tailor my advice for ${who} using the support needs in your profile (${keys.map((k) => SUPPORT_SHORT[k]).join(", ")}). Ask me about game-day prep, routines, or talking with coaches.`
+    : "Hi! I'm your SportsSteps parent assistant. Ask me about game-day prep, hydration, food, weather, or working with coaches. Add support needs in the Profile tab and I'll personalize my advice.";
+
+  const [messages, setMessages] = useState([{ role: "assistant", text: greeting }]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages, loading]);
+
+  const prompts = [
+    ...keys.map((k) => SUPPORT_PROMPTS[k]).filter(Boolean),
+    "What should my child eat before a game?",
+    "How do I handle game-day nerves?",
+  ].slice(0, 4);
+
+  const send = async (raw) => {
+    const text = (raw ?? input).trim();
+    if (!text || loading) return;
+    setInput("");
+    const next = [...messages, { role: "user", text }];
+    setMessages(next);
+    setLoading(true);
+
+    let reply;
+    if (AI_ON) {
+      try {
+        reply = await askAI(next, buildChatContext(profile, weather, nextEvent));
+      } catch (err) {
+        console.error("Parent AI request failed:", err);
+        reply = localReply(text, profile, { weather, nextEvent }) + "\n\n(The AI service couldn't be reached, so this is built-in guidance.)";
+      }
+    } else {
+      await new Promise((r) => setTimeout(r, 450));
+      reply = localReply(text, profile, { weather, nextEvent });
+    }
+    setMessages((m) => [...m, { role: "assistant", text: reply }]);
+    setLoading(false);
+  };
+
+  return (
+    <div className="fade-in">
+      <PageHeader p={p} title="Parent AI" subtitle="Personal guidance for parents, adapted to your athlete's needs" />
+
+      <div style={{ maxWidth: 760 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontFamily: body, fontSize: 12, fontWeight: 800, color: p.inkFaint }}>Tailored for:</span>
+          {keys.length === 0 ? (
+            <span style={{ fontFamily: body, fontSize: 12, color: p.inkFaint }}>General guidance (add support needs in Profile)</span>
+          ) : keys.map((k) => {
+            const o = SUPPORT_OPTIONS.find((x) => x.key === k);
+            return (
+              <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: p.primarySoft, color: p.primary, borderRadius: 999, padding: "5px 11px", fontFamily: body, fontWeight: 800, fontSize: 12 }}>
+                <span>{o?.icon}</span> {SUPPORT_SHORT[k]}
+              </span>
+            );
+          })}
+        </div>
+
+        <Card p={p} style={{ padding: 0, overflow: "hidden" }}>
+          <div ref={listRef} style={{ display: "flex", flexDirection: "column", gap: 12, padding: 18, minHeight: 300, maxHeight: "min(52vh, 480px)", overflowY: "auto" }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{ display: "flex", gap: 10, justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                {m.role === "assistant" && (
+                  <div style={{ width: 30, height: 30, borderRadius: 10, background: p.primarySoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Bot size={16} color={p.primary} />
+                  </div>
+                )}
+                <div style={{
+                  maxWidth: "82%", padding: "11px 14px", borderRadius: 16,
+                  background: m.role === "user" ? p.primary : p.bg,
+                  color: m.role === "user" ? p.onBrand : p.ink,
+                  border: m.role === "user" ? "none" : `1px solid ${p.line}`,
+                  fontFamily: body, fontSize: 13.5, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                }}>{m.text}</div>
+              </div>
+            ))}
+            {loading && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, color: p.inkFaint, fontFamily: body, fontSize: 12.5, fontWeight: 700 }}>
+                <RefreshCw size={14} className="spin" /> Thinking…
+              </div>
+            )}
+          </div>
+
+          {messages.length <= 1 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "0 18px 14px" }}>
+              {prompts.map((q) => (
+                <button key={q} onClick={() => send(q)} style={{ textAlign: "left", background: p.card, border: `1px solid ${p.line}`, borderRadius: 14, padding: "8px 12px", fontFamily: body, fontWeight: 700, fontSize: 12.5, color: p.ink, cursor: "pointer" }}>{q}</button>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, padding: 14, borderTop: `1px solid ${p.line}`, background: p.card }}>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+              placeholder="Ask about prep, routines, coaches…"
+              aria-label="Message the parent assistant"
+              maxLength={500}
+              style={{ flex: 1, padding: "13px 16px", borderRadius: 14, border: `1px solid ${p.line}`, background: p.bg, fontFamily: body, fontSize: 14, color: p.ink }}
+            />
+            <button onClick={() => send()} disabled={loading || !input.trim()} aria-label="Send" style={{ width: 48, flexShrink: 0, border: "none", borderRadius: 14, background: p.primary, opacity: loading || !input.trim() ? 0.5 : 1, cursor: loading || !input.trim() ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Send size={18} color={p.onBrand} />
+            </button>
+          </div>
+        </Card>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 14 }}>
+          <ShieldCheck size={16} color={p.inkFaint} style={{ flexShrink: 0, marginTop: 2 }} />
+          <p style={{ fontFamily: body, fontSize: 11.5, color: p.inkFaint, margin: 0, lineHeight: 1.6 }}>
+            {AI_ON ? "AI can make mistakes. " : "Built-in guidance mode. "}
+            This is general information, not medical advice. Check with your child's doctor for health decisions, and call 911 in an emergency.
+            Chats aren't saved, and your athlete's name is never sent to the AI.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProfileScreen({ p, profile, setProfile, theme, onThemeManualChange, onRestart }) {
   const toggleSupport = (key) => {
     const next = new Set(profile.support);
@@ -688,12 +1050,12 @@ function ProfileScreen({ p, profile, setProfile, theme, onThemeManualChange, onR
 
 const ABOUT_PEOPLE = [
   {
-    name: "Yash Nallabothula",            // <- change me        // <- change me
+    name: "Yash Nallabothula",         
     photo: "image0.jpg",
     bio: `Type your bio here. Tell people who you are, what sports you play, and why you helped build SportsSteps.`,
   },
   {
-    name: "Ananya Soraganvi",             // <- change me          // <- change me
+    name: "Ananya Soraganvi",           
     photo: "IMG_7245.jpg",
     bio: `Type her bio here. Tell people who she is, what she loves about sports, and why she helped build SportsSteps.`,
   },
@@ -717,14 +1079,14 @@ const TABS = [
   { id: "calendar", label: "Calendar", icon: CalendarIcon },
   { id: "prep", label: "Prep", icon: Droplet },
   { id: "nearby", label: "Nearby", icon: MapPin },
+  { id: "chat", label: "Parent AI", icon: Bot },
   { id: "profile", label: "Profile", icon: User },
-  { id: "about", label: "About", icon: Info },
 ];
 
-export default function SportsStepsApp() {
+function SportsStepsApp({ onExit }) {
   const saved = typeof window !== "undefined" ? loadSaved() : null;
 
-  const [stage, setStage] = useState(saved?.profile?.name ? "app" : "welcome");
+  const [stage, setStage] = useState(saved?.profile?.name ? "app" : "onboard");
   const [onboardStep, setOnboardStep] = useState(0);
   const [activeTab, setActiveTab] = useState("home");
 
@@ -854,6 +1216,9 @@ export default function SportsStepsApp() {
       <div style={{ minHeight: "100vh", background: p.bg, display: "flex", justifyContent: "center", padding: "48px 20px" }}>
         <GlobalStyle />
         <div style={{ width: "100%", maxWidth: 480 }}>
+          <button onClick={onExit} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer", padding: "0 0 14px", fontFamily: body, fontSize: 12.5, fontWeight: 800, color: p.inkFaint }}>
+            <ChevronLeft size={14} /> Back to website
+          </button>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28, justifyContent: "center" }}>
             <div style={{ width: 30, height: 30, borderRadius: 11, background: p.primary, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🏆</div>
             <span style={{ fontFamily: display, fontSize: 17, fontWeight: 800, color: p.ink }}>SportsSteps</span>
@@ -928,8 +1293,8 @@ export default function SportsStepsApp() {
     calendar: <CalendarScreen p={p} events={events} addEvent={addEvent} deleteEvent={deleteEvent} />,
     prep: <PrepScreen p={p} mode={prepMode} setMode={setPrepMode} hydration={hydration} goal={goal} addWater={addWater} profile={profile} />,
     nearby: <NearbyScreen p={p} profile={profile} />,
+    chat: <ChatScreen p={p} profile={profile} weather={weather} nextEvent={nextEvent} />,
     profile: <ProfileScreen p={p} profile={profile} setProfile={setProfile} theme={theme} onThemeManualChange={(k) => { setTheme(k); setThemeTouched(true); }} onRestart={restart} />,
-    about: <AboutScreen p={p} />,
   };
 
   return (
@@ -957,7 +1322,12 @@ export default function SportsStepsApp() {
         </aside>
 
         <main className="main-content">
-          <div className="content-max">{screens[activeTab]}</div>
+          <div className="content-max">
+            <button onClick={onExit} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer", padding: "0 0 14px", fontFamily: body, fontSize: 12.5, fontWeight: 800, color: p.inkFaint }}>
+              <ChevronLeft size={14} /> Back to website
+            </button>
+            {screens[activeTab]}
+          </div>
         </main>
       </div>
 
@@ -976,5 +1346,266 @@ export default function SportsStepsApp() {
         })}
       </nav>
     </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  LANDING PAGE — edit the text below to change the website copy.        */
+/* ---------------------------------------------------------------------- */
+
+const LANDING = {
+  badge: "Congressional App Challenge Entry",
+  headline: "Prep like a pro,",
+  headlineAccent: "no matter how you play.",
+  subhead: "SportsSteps helps student athletes get ready for every practice, match, and tournament — hydration, food timing, weather, and gear, all in one place. And it adapts to each athlete's needs.",
+  footer: "Built by students, for student athletes.",
+};
+
+const LANDING_FEATURES = [
+  { emoji: "💧", title: "Hydration tracking", body: "Log water in one tap and watch your daily goal fill up before practice, a match, or a tournament." },
+  { emoji: "🍌", title: "Food timing", body: "Simple pre- and post-game fuel ideas, so you always know what to eat and when." },
+  { emoji: "☀️", title: "Live weather & UV", body: "Real temperature and UV index for your location, so heat and sun never catch you off guard." },
+  { emoji: "🎒", title: "Gear checklists", body: "A quick checklist for your bottle, sunscreen, and equipment, with a little celebration when you're all set." },
+  { emoji: "🔔", title: "Smart reminders", body: "Real browser notifications with a summary of today's prep, right when you need it." },
+  { emoji: "🗓️", title: "Game calendar", body: "Add practices, matches, and tournaments and see what's coming up at a glance." },
+];
+
+const LANDING_STEPS = [
+  { n: "1", title: "Tell us about you", body: "Your name, your sport, and any support you'd like. It takes under a minute." },
+  { n: "2", title: "Get a plan that fits", body: "SportsSteps picks a theme, reminders, and resources that match your needs." },
+  { n: "3", title: "Show up ready", body: "Check off your list, hit your hydration goal, and focus on the game." },
+];
+
+function HeroPreview({ p }) {
+  const items = [
+    { emoji: "💧", label: "Water bottle", done: true },
+    { emoji: "🧴", label: "Sunscreen", done: true },
+    { emoji: "🎒", label: "Equipment", done: false },
+  ];
+  return (
+    <div className="float" style={{ background: p.card, border: `1px solid ${p.line}`, borderRadius: 28, padding: 22, boxShadow: "0 30px 60px -30px rgba(20,25,45,0.35)", maxWidth: 380, width: "100%", justifySelf: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <p style={{ fontFamily: body, fontSize: 11.5, fontWeight: 800, color: p.inkFaint, margin: 0 }}>TODAY'S PREP</p>
+          <p style={{ fontFamily: display, fontSize: 20, fontWeight: 800, color: p.ink, margin: "2px 0 0" }}>Match at 5:00 PM</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, background: p.accentSoft, color: p.accent, borderRadius: 12, padding: "6px 10px", fontFamily: body, fontWeight: 800, fontSize: 12 }}>
+          <Sun size={13} /> 98°F · UV 7
+        </div>
+      </div>
+
+      <div style={{ background: p.primarySoft, borderRadius: 18, padding: "14px 16px", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: body, fontWeight: 800, fontSize: 13, color: p.primary }}><Droplet size={15} /> Hydration</span>
+          <span style={{ fontFamily: body, fontWeight: 800, fontSize: 12.5, color: p.ink }}>32 / 64 oz</span>
+        </div>
+        <div style={{ height: 8, borderRadius: 6, background: p.card }}>
+          <div style={{ width: "50%", height: "100%", borderRadius: 6, background: p.primary }} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {items.map((it) => (
+          <div key={it.label} style={{ display: "flex", alignItems: "center", gap: 12, background: p.bg, border: `1px solid ${p.line}`, borderRadius: 14, padding: "10px 12px" }}>
+            <span style={{ fontSize: 18 }}>{it.emoji}</span>
+            <span style={{ flex: 1, fontFamily: body, fontWeight: 700, fontSize: 13.5, color: p.ink, textDecoration: it.done ? "line-through" : "none", opacity: it.done ? 0.6 : 1 }}>{it.label}</span>
+            <div style={{ width: 22, height: 22, borderRadius: 7, background: it.done ? p.good : "transparent", border: it.done ? "none" : `2px solid ${p.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {it.done && <Check size={14} color={p.onBrand} />}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SectionTitle({ p, eyebrow, title, sub }) {
+  return (
+    <div style={{ textAlign: "center", maxWidth: 620, margin: "0 auto 32px" }}>
+      {eyebrow && <p style={{ fontFamily: body, fontSize: 12, fontWeight: 800, letterSpacing: 1, color: p.primary, margin: "0 0 8px", textTransform: "uppercase" }}>{eyebrow}</p>}
+      <h2 style={{ fontFamily: display, fontSize: "clamp(26px, 3.6vw, 36px)", fontWeight: 800, color: p.ink, margin: 0, lineHeight: 1.15 }}>{title}</h2>
+      {sub && <p style={{ fontFamily: body, fontSize: 15, color: p.inkFaint, margin: "10px 0 0", lineHeight: 1.6 }}>{sub}</p>}
+    </div>
+  );
+}
+
+function LandingHome({ p, onStart, onAbout, startLabel }) {
+  return (
+    <div className="fade-in">
+      <div className="land-wrap">
+        <section className="land-hero">
+          <div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: p.primarySoft, color: p.primary, borderRadius: 999, padding: "7px 14px", fontFamily: body, fontWeight: 800, fontSize: 12.5, marginBottom: 20 }}>
+              <Sparkles size={14} /> {LANDING.badge}
+            </div>
+            <h1 className="land-h1" style={{ fontFamily: display, fontWeight: 800, color: p.ink, margin: 0 }}>
+              {LANDING.headline}{" "}
+              <span style={{ color: p.primary }}>{LANDING.headlineAccent}</span>
+            </h1>
+            <p style={{ fontFamily: body, fontSize: 17, color: p.inkFaint, lineHeight: 1.65, margin: "18px 0 0", maxWidth: 520 }}>{LANDING.subhead}</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 28 }}>
+              <button onClick={onStart} className="land-btn pulse-ring" style={{ display: "inline-flex", alignItems: "center", gap: 8, background: p.primary, color: p.onBrand, border: "none", borderRadius: 16, padding: "15px 28px", fontFamily: body, fontWeight: 800, fontSize: 16, cursor: "pointer" }}>
+                {startLabel} <ChevronRight size={19} />
+              </button>
+              <button onClick={onAbout} className="land-btn" style={{ background: p.card, color: p.ink, border: `1px solid ${p.line}`, borderRadius: 16, padding: "15px 24px", fontFamily: body, fontWeight: 800, fontSize: 16, cursor: "pointer" }}>
+                Meet the team
+              </button>
+            </div>
+            <p style={{ fontFamily: body, fontSize: 12.5, color: p.inkFaint, marginTop: 16 }}>Free · No account needed · Works in your browser</p>
+          </div>
+          <HeroPreview p={p} />
+        </section>
+      </div>
+
+      <section style={{ padding: "24px 0 56px" }}>
+        <div className="land-wrap">
+          <SectionTitle p={p} eyebrow="Features" title="Everything you need before game time" sub="Hydration, food, weather, gear, and your schedule, all handled in one simple app." />
+          <div className="land-grid3">
+            {LANDING_FEATURES.map((f) => (
+              <Card key={f.title} p={p} className="land-card" style={{ padding: 22 }}>
+                <div style={{ width: 46, height: 46, borderRadius: 15, background: p.primarySoft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, marginBottom: 14 }}>{f.emoji}</div>
+                <p style={{ fontFamily: display, fontSize: 18, fontWeight: 800, color: p.ink, margin: 0 }}>{f.title}</p>
+                <p style={{ fontFamily: body, fontSize: 13.5, color: p.inkFaint, margin: "6px 0 0", lineHeight: 1.6 }}>{f.body}</p>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section style={{ padding: "56px 0", background: p.card, borderTop: `1px solid ${p.line}`, borderBottom: `1px solid ${p.line}` }}>
+        <div className="land-wrap">
+          <SectionTitle p={p} eyebrow="Inclusive by design" title="Built for every athlete" sub="Tell SportsSteps what support helps you and it adapts its look, reminders, and community resources. Choose from four themes: Vivid, Calm, Dark, and High Contrast." />
+          <div className="land-grid3">
+            {SUPPORT_OPTIONS.map((o) => (
+              <div key={o.key} style={{ display: "flex", alignItems: "center", gap: 14, background: p.bg, border: `1px solid ${p.line}`, borderRadius: 18, padding: "16px 18px" }}>
+                <span style={{ fontSize: 26 }}>{o.icon}</span>
+                <div>
+                  <p style={{ fontFamily: body, fontWeight: 800, fontSize: 14, color: p.ink, margin: 0 }}>{o.label}</p>
+                  <p style={{ fontFamily: body, fontSize: 12, color: p.inkFaint, margin: "2px 0 0" }}>{o.hint}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section style={{ padding: "56px 0" }}>
+        <div className="land-wrap">
+          <SectionTitle p={p} eyebrow="How it works" title="Ready in three steps" />
+          <div className="land-grid3">
+            {LANDING_STEPS.map((st) => (
+              <Card key={st.n} p={p} style={{ padding: 22 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 12, background: p.primary, color: p.onBrand, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: display, fontWeight: 800, fontSize: 18, marginBottom: 12 }}>{st.n}</div>
+                <p style={{ fontFamily: display, fontSize: 18, fontWeight: 800, color: p.ink, margin: 0 }}>{st.title}</p>
+                <p style={{ fontFamily: body, fontSize: 13.5, color: p.inkFaint, margin: "6px 0 0", lineHeight: 1.6 }}>{st.body}</p>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section style={{ padding: "0 0 64px" }}>
+        <div className="land-wrap">
+          <div style={{ background: p.primary, borderRadius: 28, padding: "44px 28px", textAlign: "center" }}>
+            <h2 style={{ fontFamily: display, fontSize: "clamp(26px, 3.6vw, 36px)", fontWeight: 800, color: p.onBrand, margin: 0 }}>Ready to step up your prep?</h2>
+            <p style={{ fontFamily: body, fontSize: 15.5, color: p.onBrand, opacity: 0.9, margin: "10px auto 22px", maxWidth: 460, lineHeight: 1.6 }}>Set up takes under a minute, and there's nothing to download.</p>
+            <button onClick={onStart} className="land-btn" style={{ display: "inline-flex", alignItems: "center", gap: 8, background: p.card, color: p.primary, border: "none", borderRadius: 16, padding: "15px 30px", fontFamily: body, fontWeight: 800, fontSize: 16, cursor: "pointer" }}>
+              {startLabel} <ChevronRight size={19} />
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function LandingPage({ p, onStart, startLabel }) {
+  const [tab, setTab] = useState("home");
+
+  useEffect(() => { window.scrollTo({ top: 0 }); }, [tab]);
+
+  const navTabs = [
+    { id: "home", label: "Home", icon: Home },
+    { id: "about", label: "About Us", icon: Info },
+  ];
+
+  return (
+    <div style={{ background: p.bg, minHeight: "100vh" }}>
+      <GlobalStyle />
+      <header style={{ position: "sticky", top: 0, zIndex: 20, background: p.card, borderBottom: `1px solid ${p.line}` }}>
+        <div className="land-wrap" style={{ display: "flex", alignItems: "center", gap: 6, height: 66 }}>
+          <button onClick={() => setTab("home")} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", padding: 0, marginRight: 12 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 11, background: p.primary, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🏆</div>
+            <span className="land-logo-text" style={{ fontFamily: display, fontSize: 18, fontWeight: 800, color: p.ink }}>SportsSteps</span>
+          </button>
+
+          {navTabs.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button key={t.id} className="land-tab" onClick={() => setTab(t.id)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", borderRadius: 12, background: active ? p.primarySoft : "transparent", border: "none", cursor: "pointer" }}>
+                <Icon size={16} color={active ? p.primary : p.inkFaint} />
+                <span style={{ fontFamily: body, fontWeight: 800, fontSize: 14, color: active ? p.primary : p.ink }}>{t.label}</span>
+              </button>
+            );
+          })}
+
+          <div style={{ flex: 1 }} />
+
+          <button onClick={onStart} className="land-btn land-cta" style={{ display: "flex", alignItems: "center", gap: 6, background: p.primary, color: p.onBrand, border: "none", borderRadius: 13, padding: "10px 16px", fontFamily: body, fontWeight: 800, fontSize: 14, cursor: "pointer", whiteSpace: "nowrap" }}>
+            {startLabel} <ChevronRight size={16} />
+          </button>
+        </div>
+      </header>
+
+      {tab === "home" && <LandingHome p={p} onStart={onStart} onAbout={() => setTab("about")} startLabel={startLabel} />}
+      {tab === "about" && (
+        <div className="land-wrap fade-in" style={{ padding: "40px 24px 64px" }}>
+         <div style={{ maxWidth: 900, margin: "0 auto" }}>
+          <AboutScreen p={p} />
+          <div style={{ marginTop: 24, textAlign: "center" }}>
+            <button onClick={onStart} className="land-btn" style={{ display: "inline-flex", alignItems: "center", gap: 8, background: p.primary, color: p.onBrand, border: "none", borderRadius: 16, padding: "14px 26px", fontFamily: body, fontWeight: 800, fontSize: 15, cursor: "pointer" }}>
+              {startLabel} <ChevronRight size={18} />
+            </button>
+          </div>
+         </div>
+        </div>
+      )}
+
+      <footer style={{ borderTop: `1px solid ${p.line}`, padding: "22px 0 28px", textAlign: "center" }}>
+        <p style={{ fontFamily: body, fontSize: 12.5, color: p.inkFaint, margin: 0 }}>🏆 SportsSteps · {LANDING.footer}</p>
+      </footer>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Site root: landing page  <->  the app                                  */
+/* ---------------------------------------------------------------------- */
+
+export default function Site() {
+  const [view, setView] = useState("site");
+  const [siteTheme, setSiteTheme] = useState(() => loadSaved()?.theme || "vivid");
+  const returning = !!loadSaved()?.profile?.name;
+
+  useEffect(() => { window.scrollTo({ top: 0 }); }, [view]);
+
+  if (view === "app") {
+    return (
+      <SportsStepsApp
+        onExit={() => {
+          setSiteTheme(loadSaved()?.theme || "vivid");
+          setView("site");
+        }}
+      />
+    );
+  }
+
+  return (
+    <LandingPage
+      p={PALETTES[siteTheme] || PALETTES.vivid}
+      onStart={() => setView("app")}
+      startLabel={returning ? "Open my app" : "Let's get started"}
+    />
   );
 }
